@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Jaffa Annotations</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #111; color: #fff; font-family: monospace; }
+
+  #canvas { display: block; width: 100vw; height: 100vh; }
+
+  /* HUD overlay */
+  #hud {
+    position: fixed; top: 10px; left: 10px; z-index: 20;
+    display: flex; flex-direction: column; gap: 2px;
+    pointer-events: none;
+  }
+  #fps, #camid { font-size: 11px; color: #888; }
+
+  /* Loading progress bar */
+  #progress-wrap {
+    position: fixed; bottom: 0; left: 0; width: 100%; height: 3px;
+    background: transparent; z-index: 30;
+  }
+  #progress { width: 0%; height: 100%; background: #0af; transition: width 0.15s; }
+
+  /* Spinner / loader */
+  #spinner {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    z-index: 40; text-align: center; font-family: monospace;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    transition: opacity 0.35s;
+  }
+  #loader-name {
+    font-size: 15px; color: #ccc; letter-spacing: 0.5px;
+  }
+  #loader-track {
+    width: 200px; height: 2px; background: #222; border-radius: 1px; overflow: hidden;
+  }
+  #loader-fill {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, #07e, #0af);
+    border-radius: 1px; transition: width 0.15s ease-out;
+  }
+  #loader-pct {
+    font-size: 11px; color: #555; letter-spacing: 1px;
+  }
+
+  /* Error message */
+  #message {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    z-index: 50; color: #f55; font-size: 13px; text-align: center;
+    max-width: 60vw; display: none;
+  }
+
+  /* Controls hint */
+  #hint {
+    position: fixed; bottom: 12px; right: 12px; z-index: 20;
+    font-size: 10px; color: #555; text-align: right; pointer-events: none;
+    line-height: 1.6;
+  }
+
+  /* ── Stage 2+ UI (hidden until needed) ── */
+  #toolbar {
+    position: fixed; top: 10px; right: 10px; z-index: 20;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  #toolbar button {
+    padding: 7px 14px; border: 1px solid #444; border-radius: 4px;
+    background: rgba(0,0,0,0.7); color: #eee; font-family: monospace;
+    font-size: 12px; cursor: pointer; backdrop-filter: blur(4px);
+  }
+  #toolbar button:hover { border-color: #0af; color: #0af; }
+  #toolbar button:disabled { opacity: 0.4; cursor: default; border-color: #333; color: #555; }
+
+  #ann-progress { padding: 2px 0; }
+  #ann-progress-label { font-size: 10px; color: #666; margin-bottom: 4px; }
+  #ann-progress-track {
+    width: 100%; height: 2px; background: #1a1a1a;
+    border-radius: 1px; overflow: hidden;
+  }
+  #ann-progress-fill {
+    height: 100%; width: 0%; background: #0af;
+    border-radius: 1px; transition: width 0.3s ease;
+  }
+
+  /* ── Stage 5: navigation mode switcher ── */
+  #nav-mode {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    z-index: 22; display: flex; align-items: center; gap: 3px;
+    background: rgba(0,0,0,0.65); backdrop-filter: blur(6px);
+    border: 1px solid #2a2a2a; border-radius: 9px; padding: 4px 6px;
+  }
+  .nav-mode-btn {
+    padding: 4px 13px; border: 1px solid transparent; border-radius: 6px;
+    background: transparent; color: #555; font-family: monospace; font-size: 11px;
+    cursor: pointer; transition: all 0.14s; user-select: none;
+  }
+  .nav-mode-btn:hover { color: #999; }
+  .nav-mode-btn.active { background: rgba(0,170,255,0.12); border-color: rgba(0,170,255,0.5); color: #0af; }
+
+  /* ── Stage 4: billboard label chips ── */
+  #ann-layer {
+    position: fixed; inset: 0; pointer-events: none; z-index: 15; overflow: hidden;
+  }
+  .ann-label {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    pointer-events: auto; cursor: pointer;
+    transition: opacity 0.25s;
+    user-select: none;
+  }
+  .ann-label.hidden  { opacity: 0; pointer-events: none; }
+  .ann-label.pending { opacity: 0 !important; pointer-events: none !important; }
+  .ann-chip {
+    display: flex; align-items: center; gap: 4px;
+    padding: 3px 7px 3px 5px;
+    border-radius: 3px;
+    font-family: monospace; font-size: 11px; font-weight: bold; color: #000;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.55);
+    white-space: nowrap; line-height: 1.35;
+    transition: filter 0.12s;
+  }
+  .ann-chip:hover { filter: brightness(1.18); }
+  .ann-chip-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: rgba(0,0,0,0.28); flex-shrink: 0;
+  }
+  .ann-chip-pct {
+    font-size: 9px; font-weight: normal;
+    opacity: 0.6; margin-left: 2px;
+  }
+
+  /* Annotation popup */
+  #ann-popup {
+    position: fixed; z-index: 25;
+    pointer-events: none; opacity: 0;
+    transition: opacity 0.15s;
+    max-width: 300px;
+  }
+  #ann-popup.visible { pointer-events: auto; opacity: 1; }
+  .ann-popup-card {
+    background: rgba(8,8,14,0.93);
+    backdrop-filter: blur(12px) saturate(1.4);
+    -webkit-backdrop-filter: blur(12px) saturate(1.4);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    box-shadow: 0 6px 28px rgba(0,0,0,0.7);
+    padding: 10px 28px 10px 14px;
+    font-family: monospace; color: #dde;
+    overflow: hidden; position: relative;
+  }
+  .ann-popup-accent {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    border-radius: 8px 0 0 8px;
+  }
+  .ann-popup-header {
+    display: flex; align-items: center; gap: 7px; margin-bottom: 6px;
+  }
+  .ann-popup-title { font-size: 12px; font-weight: bold; flex: 1; }
+  .ann-popup-conf {
+    font-size: 9px; padding: 2px 5px; border-radius: 10px; letter-spacing: 0.3px;
+  }
+  .ann-popup-desc { font-size: 10px; color: #889; line-height: 1.55; }
+  .ann-popup-close {
+    position: absolute; top: 7px; right: 9px;
+    font-size: 12px; color: #555; cursor: pointer;
+    background: none; border: none; padding: 0; line-height: 1;
+    font-family: monospace;
+  }
+  .ann-popup-close:hover { color: #ccc; }
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<!-- HUD -->
+<div id="hud">
+  <span id="fps">– fps</span>
+  <span id="camid"></span>
+</div>
+
+<!-- Loading -->
+<div id="progress-wrap"><div id="progress"></div></div>
+<div id="spinner">
+  <div id="loader-name">–</div>
+  <div id="loader-track"><div id="loader-fill"></div></div>
+  <div id="loader-pct">connecting…</div>
+</div>
+<div id="message"></div>
+
+<!-- Toolbar -->
+<div id="toolbar">
+  <button id="btn-annotate" title="Capture current view and annotate with Claude Vision">AI Vision analysis</button>
+  <button id="btn-save-ann" style="display:none" title="Download annotation positions as JSON">Save annotations</button>
+  <button id="btn-load-ann" title="Load a previously saved annotations JSON">Load annotations</button>
+  <input  id="ann-file-input" type="file" accept=".json" style="display:none">
+  <div id="ann-progress" style="display:none">
+    <div id="ann-progress-label"></div>
+    <div id="ann-progress-track"><div id="ann-progress-fill"></div></div>
+  </div>
+</div>
+
+<!-- Controls hint (updated by Stage 5 camera controls) -->
+<div id="hint">
+  <strong style="color:#0af">Navigate to a position then click "AI Vision analysis"</strong>
+</div>
+
+<script src="splat-main.js"></script>
+<script>
+// Set loader model name from URL param (same logic as splat-main.js)
+(function() {
+  const url = new URLSearchParams(location.search).get('url') || '/exp_jaffa.ply';
+  document.getElementById('loader-name').textContent = url.split('/').pop();
+})();
+
+// ─── Simulated loader (0 → 100 % over 20 s, then hide when scene ready) ──
+(function simulateLoader() {
+  const DURATION = 20000;
+  const fill    = document.getElementById('loader-fill');
+  const pct     = document.getElementById('loader-pct');
+  const bar     = document.getElementById('progress');
+  const spinner = document.getElementById('spinner');
+  const t0      = performance.now();
+
+  function setP(p) {
+    const v = Math.round(p);
+    if (fill) fill.style.width = v + '%';
+    if (pct)  pct.textContent  = v + '%';
+    if (bar)  bar.style.width  = v + '%';
+  }
+
+  function hide() {
+    setP(100);
+    if (bar) bar.style.display = 'none';
+    if (spinner) {
+      spinner.style.opacity = '0';
+      setTimeout(() => { spinner.style.display = 'none'; }, 360);
+    }
+  }
+
+  function tick(now) {
+    const elapsed = now - t0;
+    const p = Math.min(elapsed / DURATION * 100, 100);
+    setP(p);
+
+    if (p < 100) {
+      requestAnimationFrame(tick);
+    } else {
+      // Animation done — wait for scene to be ready before hiding
+      (function waitReady() {
+        if (window._splat?.isReady()) { hide(); }
+        else requestAnimationFrame(waitReady);
+      })();
+    }
+  }
+
+  requestAnimationFrame(tick);
+})();
+
+const COLORS = ['#f55','#5af','#5f5','#ff5','#f5f','#5ff','#fa5','#a5f','#f5a','#af5'];
+
+// ─── Annotate current view ─────────────────────────────────────────────────
+(function initAnnotator() {
+  const SYSTEM_PROMPT =
+    'You are an expert architectural and archaeological analyst specializing in late Ottoman, Crusader, ' +
+    'and ancient Mediterranean sites. Examine the scene carefully and identify every distinct ' +
+    'architectural or archaeological element visible. ' +
+    'Return ONLY a valid JSON array with no other text, markdown, or explanation. ' +
+    'Each element must have exactly these fields:\n' +
+    '  label: a concise noun phrase naming the element (e.g. "pointed arch doorway", "rusticated ashlar masonry");\n' +
+    '  description: three sentences — (1) identify the element and its visible characteristics, ' +
+    '(2) describe its construction material, technique, or style with specific architectural terminology, ' +
+    '(3) explain its historical or cultural significance within late Ottoman, Crusader, or ancient Mediterranean archaeology;\n' +
+    '  bbox: [x1, y1, x2, y2] as 0–1 fractions of image dimensions, drawn tightly around the element;\n' +
+    '  confidence: 0–1 reflecting how clearly the element is visible and identifiable.';
+
+  const MODEL = 'claude-sonnet-4-6';
+
+  const btn           = document.getElementById('btn-annotate');
+  const progressWrap  = document.getElementById('ann-progress');
+  const progressLabel = document.getElementById('ann-progress-label');
+  const progressFill  = document.getElementById('ann-progress-fill');
+
+  let crawlTimer = null;
+
+  function setProgress(pct, label) {
+    if (label !== undefined) progressLabel.textContent = label;
+    progressFill.style.width = pct + '%';
+  }
+
+  function startCrawl(from, to) {
+    let pct = from;
+    clearInterval(crawlTimer);
+    crawlTimer = setInterval(() => {
+      pct = Math.min(to, pct + 0.35);
+      progressFill.style.width = pct + '%';
+      if (pct >= to) clearInterval(crawlTimer);
+    }, 100);
+  }
+
+  function resizeCanvas(src, maxPx = 1024) {
+    const scale = Math.min(1, maxPx / Math.max(src.width, src.height));
+    if (scale >= 1) return src;
+    const tmp = document.createElement('canvas');
+    tmp.width  = Math.round(src.width  * scale);
+    tmp.height = Math.round(src.height * scale);
+    tmp.getContext('2d').drawImage(src, 0, 0, tmp.width, tmp.height);
+    return tmp;
+  }
+
+  function captureCurrentView() {
+    return new Promise(resolve => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        window._splat.onDepthUpdate = null;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          resolve(resizeCanvas(window._splat.getCanvas()).toDataURL('image/jpeg', 0.85));
+        }));
+      };
+      window._splat.onDepthUpdate = finish;
+      setTimeout(finish, 2500);
+    });
+  }
+
+  async function callClaude(dataUrl) {
+    const b64  = dataUrl.split(',')[1];
+    const body = JSON.stringify({
+      model: MODEL,
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
+          { type: 'text',  text: 'Identify all architectural and archaeological elements visible in this image.' }
+        ]
+      }]
+    });
+
+    const resp = await fetch('/api/claude', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    });
+    if (!resp.ok) throw new Error(`API ${resp.status}: ${await resp.text()}`);
+
+    const data = await resp.json();
+    let text = data.content[0].text.trim();
+    const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenceMatch) {
+      text = fenceMatch[1].trim();
+    } else if (!text.startsWith('[')) {
+      const m = text.match(/\[[\s\S]*\]/);
+      if (m) text = m[0];
+    }
+    return JSON.parse(text);
+  }
+
+  btn.addEventListener('click', async () => {
+    if (!window._splat?.isReady()) return;
+
+    btn.disabled = true;
+    progressFill.style.background = '#0af';
+    progressWrap.style.display = '';
+    setProgress(5, 'Vision analysis…');
+
+    try {
+      await new Promise(r => requestAnimationFrame(r));
+      const viewMatrix = window._splat.getViewMatrix();
+      const dataUrl = await captureCurrentView();
+
+      setProgress(20, 'Vision analysis…');
+      startCrawl(20, 78);
+
+      const annotations = await callClaude(dataUrl);
+      clearInterval(crawlTimer);
+
+      setProgress(82, 'Rationalizing…');
+      await new Promise(r => requestAnimationFrame(r));
+
+      const allAnnotations = [{ viewIndex: 0, matrix: viewMatrix, annotations }];
+      window._allAnnotations = allAnnotations;
+      const prevCount = (window._allBillboards || []).length;
+      if (typeof window._onAnnotationsDone === 'function') window._onAnnotationsDone(allAnnotations);
+
+      const total = window._billboards?.length || 0;
+      const newCount = total - prevCount;
+      const overlay = window._currentOverlay;
+      setProgress(86, 'Plotting…');
+
+      for (let i = prevCount; i < total; i++) {
+        await new Promise(r => setTimeout(r, 140));
+        overlay?.revealAt(i);
+        progressFill.style.width = (86 + (i - prevCount + 1) / Math.max(newCount, 1) * 13) + '%';
+      }
+
+      console.log(`[annotate] ${newCount} new annotation(s) plotted (${total} total)`);
+      setProgress(100, newCount > 0
+        ? `${newCount} new element(s) found (${total} total)`
+        : 'No new elements found');
+      setTimeout(() => {
+        progressWrap.style.display = 'none';
+        progressFill.style.width = '0%';
+      }, 1400);
+
+    } catch (err) {
+      clearInterval(crawlTimer);
+      setProgress(100, 'Error: ' + err.message);
+      progressFill.style.background = '#f55';
+      setTimeout(() => {
+        progressWrap.style.display = 'none';
+        progressFill.style.background = '#0af';
+        progressFill.style.width = '0%';
+      }, 3500);
+      console.error('[annotate]', err);
+    }
+
+    btn.disabled = false;
+  });
+})();
+
+// ─── Stage 4: 3D Billboard Tooltips ───────────────────────────────────────
+(function initBillboards() {
+  // All utils/splat calls are inside functions called after scene loads
+  function invert4(m) { return window._splat.utils.invert4(m); }
+
+  function dot3(a, b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+  function norm3(v) {
+    const L = Math.hypot(v[0], v[1], v[2]);
+    return L < 1e-12 ? [0,0,1] : [v[0]/L, v[1]/L, v[2]/L];
+  }
+
+  // Camera world position from column-major view matrix
+  function camWorldPos(V) {
+    const inv = invert4(V);
+    return [inv[12], inv[13], inv[14]];
+  }
+
+  // Screen (sx,sy ∈ [0,1]) → normalized world-space ray direction.
+  // Camera looks along +Z; P[0]=2fx/W, P[5]=-2fy/H.
+  function unprojectDir(sx, sy, V, P) {
+    const nx = 2*sx - 1;
+    const ny = 1 - 2*sy;        // flip Y (screen 0=top)
+    const dx = nx / P[0];
+    const dy = ny / P[5];
+    const dz = 1;
+    return norm3([
+      V[0]*dx + V[1]*dy + V[2]*dz,
+      V[4]*dx + V[5]*dy + V[6]*dz,
+      V[8]*dx + V[9]*dy + V[10]*dz,
+    ]);
+  }
+
+  // Midpoint of closest approach of two rays; null if near-parallel, behind, or too far
+  function rayMidpoint(O1, D1, O2, D2) {
+    // Discard near-parallel camera directions (< ~14° separation)
+    if (dot3(D1,D2) > 0.97) return null;
+    const w = [O1[0]-O2[0], O1[1]-O2[1], O1[2]-O2[2]];
+    const a = dot3(D1,D1), b = dot3(D1,D2), c = dot3(D2,D2);
+    const d = dot3(D1,w),  e = dot3(D2,w);
+    const den = a*c - b*b;
+    if (Math.abs(den) < 1e-8) return null;
+    const t1 = (b*e - c*d) / den;
+    const t2 = (a*e - b*d) / den;
+    if (t1 < 0.1 || t2 < 0.1) return null;
+    const mid = [
+      (O1[0]+t1*D1[0] + O2[0]+t2*D2[0]) * 0.5,
+      (O1[1]+t1*D1[1] + O2[1]+t2*D2[1]) * 0.5,
+      (O1[2]+t1*D1[2] + O2[2]+t2*D2[2]) * 0.5,
+    ];
+    // Reject outliers more than 15 units from either camera origin
+    if (Math.hypot(mid[0]-O1[0],mid[1]-O1[1],mid[2]-O1[2]) > 15) return null;
+    if (Math.hypot(mid[0]-O2[0],mid[1]-O2[1],mid[2]-O2[2]) > 15) return null;
+    return mid;
+  }
+
+  // World point → {sx,sy} in [0,1] or null if behind camera / off-screen
+  function projectScreen(P3, V, Proj) {
+    const cx = V[0]*P3[0] + V[4]*P3[1] + V[8]*P3[2]  + V[12];
+    const cy = V[1]*P3[0] + V[5]*P3[1] + V[9]*P3[2]  + V[13];
+    const cz = V[2]*P3[0] + V[6]*P3[1] + V[10]*P3[2] + V[14];
+    if (cz < 0.4) return null;
+    const nx = Proj[0]*cx / cz;
+    const ny = Proj[5]*cy / cz;
+    const sx = (nx + 1) * 0.5;
+    const sy = (1 - ny) * 0.5;
+    if (sx < -0.04 || sx > 1.04 || sy < -0.04 || sy > 1.04) return null;
+    return { sx, sy };
+  }
+
+  // Group by label → triangulate one world position per unique element
+  function buildBillboards(allAnnotations) {
+    const P = window._splat.getProjectionMatrix();
+    const groups = new Map();
+
+    for (const view of allAnnotations) {
+      const V = view.matrix;
+      const O = camWorldPos(V);
+      for (const ann of view.annotations) {
+        const key = ann.label.toLowerCase().trim();
+        if (!groups.has(key)) groups.set(key, { label: ann.label, desc: '', conf: 0, rays: [] });
+        const g = groups.get(key);
+        const c = ann.confidence || 0;
+        if (c > g.conf) { g.conf = c; g.desc = ann.description || ''; }
+        const cx = (ann.bbox[0] + ann.bbox[2]) * 0.5;
+        const cy = (ann.bbox[1] + ann.bbox[3]) * 0.5;
+        g.rays.push({ O, D: unprojectDir(cx, cy, V, P) });
+      }
+    }
+
+    const FALLBACK_DEPTH = 5.5;
+    const billboards = [];
+    for (const [, g] of groups) {
+      let pos;
+      const pts = [];
+      for (let i = 0; i < g.rays.length; i++) {
+        for (let j = i+1; j < g.rays.length; j++) {
+          const mid = rayMidpoint(g.rays[i].O, g.rays[i].D, g.rays[j].O, g.rays[j].D);
+          if (mid) pts.push(mid);
+        }
+      }
+      if (pts.length) {
+        pos = [
+          pts.reduce((s,p) => s+p[0], 0) / pts.length,
+          pts.reduce((s,p) => s+p[1], 0) / pts.length,
+          pts.reduce((s,p) => s+p[2], 0) / pts.length,
+        ];
+      } else {
+        const { O, D } = g.rays[0];
+        pos = [O[0]+D[0]*FALLBACK_DEPTH, O[1]+D[1]*FALLBACK_DEPTH, O[2]+D[2]*FALLBACK_DEPTH];
+      }
+      billboards.push({ label: g.label, desc: g.desc, conf: g.conf, pos });
+    }
+
+    billboards.sort((a,b) => b.conf - a.conf);
+    billboards.splice(20);
+    console.log(`[billboard] ${billboards.length} unique labels in 3D`, billboards);
+    return billboards;
+  }
+
+  // Build overlay DOM and run the per-frame positioning loop
+  function spawnOverlay(billboards, fromIndex = 0) {
+    const old = document.getElementById('ann-layer');
+    if (old) old.remove();
+    const layer = document.createElement('div');
+    layer.id = 'ann-layer';
+    document.body.appendChild(layer);
+
+    // Singleton popup — recreate fresh each spawnOverlay call
+    let popup = document.getElementById('ann-popup');
+    if (popup) popup.remove();
+    popup = document.createElement('div');
+    popup.id = 'ann-popup';
+    document.body.appendChild(popup);
+
+    function openPopup(b, color, anchorEl) {
+      const pct = Math.round((b.conf || 0) * 100);
+      popup.innerHTML =
+        `<div class="ann-popup-card">` +
+        `<div class="ann-popup-accent" style="background:${color}"></div>` +
+        `<button class="ann-popup-close">✕</button>` +
+        `<div class="ann-popup-header">` +
+        `<span class="ann-popup-title">${b.label}</span>` +
+        `<span class="ann-popup-conf" style="background:${color}33;color:${color}">${pct}%</span>` +
+        `</div>` +
+        (b.desc ? `<div class="ann-popup-desc">${b.desc}</div>` : '') +
+        `</div>`;
+
+      const rect = anchorEl.getBoundingClientRect();
+      const W = window.innerWidth, H = window.innerHeight;
+      const pw = 300, ph = 130;
+      let left = rect.left + rect.width / 2 - pw / 2;
+      let top  = rect.top - ph - 10;
+      if (left + pw > W - 8) left = W - pw - 8;
+      if (left < 8) left = 8;
+      if (top < 8) top = rect.bottom + 8;
+
+      Object.assign(popup.style, {
+        left: left + 'px', top: top + 'px',
+        pointerEvents: 'none', opacity: '0',
+      });
+      requestAnimationFrame(() => {
+        popup.style.pointerEvents = 'auto';
+        popup.style.opacity = '1';
+      });
+
+      popup.querySelector('.ann-popup-close').addEventListener('click', e => {
+        e.stopPropagation();
+        popup.style.opacity = '0';
+        setTimeout(() => { popup.style.pointerEvents = 'none'; }, 150);
+      });
+    }
+
+    // Dismiss popup when clicking outside
+    if (window._annDismissHandler) {
+      document.removeEventListener('click', window._annDismissHandler, true);
+    }
+    window._annDismissHandler = e => {
+      const p = document.getElementById('ann-popup');
+      if (!p || p.style.opacity === '0') return;
+      if (!p.contains(e.target) && !e.target.closest('.ann-label')) {
+        p.style.opacity = '0';
+        setTimeout(() => { p.style.pointerEvents = 'none'; }, 150);
+      }
+    };
+    document.addEventListener('click', window._annDismissHandler, true);
+
+    const items = billboards.map((b, i) => {
+      const color = COLORS[i % COLORS.length];
+      const pct   = Math.round((b.conf || 0) * 100);
+      const chip  = document.createElement('div');
+      chip.className = 'ann-label' + (i >= fromIndex ? ' pending' : '');
+      chip.innerHTML =
+        `<div class="ann-chip" style="background:${color}">` +
+        `<span class="ann-chip-dot"></span>${b.label}` +
+        `<span class="ann-chip-pct">${pct}%</span>` +
+        `</div>`;
+      layer.appendChild(chip);
+
+      chip.addEventListener('click', e => {
+        e.stopPropagation();
+        openPopup(b, color, chip);
+      });
+
+      return { chip, pos: b.pos };
+    });
+
+    (function frame() {
+      const V    = window._splat.getViewMatrix();
+      const Proj = window._splat.getProjectionMatrix();
+      const W = window.innerWidth, H = window.innerHeight;
+      for (const it of items) {
+        const sc = projectScreen(it.pos, V, Proj);
+        if (!sc) {
+          it.chip.classList.add('hidden');
+        } else {
+          it.chip.style.left = (sc.sx * W) + 'px';
+          it.chip.style.top  = (sc.sy * H) + 'px';
+          it.chip.classList.remove('hidden');
+        }
+      }
+      requestAnimationFrame(frame);
+    })();
+
+    return {
+      revealAt(i)  { if (items[i]) items[i].chip.classList.remove('pending'); },
+      revealAll()  { items.forEach(it => it.chip.classList.remove('pending')); },
+    };
+  }
+
+  window._spawnOverlay = spawnOverlay;
+
+  window._onAnnotationsDone = (data) => {
+    const existing = window._allBillboards || [];
+    const newBillboards = buildBillboards(data);
+    const allBillboards = [...existing, ...newBillboards];
+    window._allBillboards = allBillboards;
+    window._billboards = allBillboards;
+    window._currentOverlay = spawnOverlay(allBillboards, existing.length);
+    document.getElementById('btn-save-ann').style.display = '';
+  };
+})();
+
+// ─── Stage 6: Save / Load annotations ────────────────────────────────────
+(function initSaveLoad() {
+  const btnSave  = document.getElementById('btn-save-ann');
+  const btnLoad  = document.getElementById('btn-load-ann');
+  const fileInput = document.getElementById('ann-file-input');
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+  btnSave.addEventListener('click', () => {
+    const bb = window._billboards;
+    if (!bb?.length) return;
+    const modelName = (new URLSearchParams(location.search).get('url') || '/exp_jaffa.ply').split('/').pop();
+    const payload = {
+      version: 1,
+      model:   modelName,
+      saved:   new Date().toISOString(),
+      billboards: bb.map(b => ({ label: b.label, desc: b.desc || '', conf: b.conf, pos: b.pos })),
+    };
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
+    a.download = modelName.replace(/\.[^.]+$/, '') + '_annotations.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    console.log(`[save] ${payload.billboards.length} annotations → ${a.download}`);
+  });
+
+  // ── Load ──────────────────────────────────────────────────────────────────
+  btnLoad.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    fileInput.value = '';
+
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!Array.isArray(data.billboards) || !data.billboards.length)
+          throw new Error('No billboards array found in file.');
+
+        const billboards = data.billboards.map(b => ({
+          label: b.label || '?',
+          desc:  b.desc  || '',
+          conf:  b.conf  || 0,
+          pos:   b.pos,
+        }));
+
+        window._allBillboards = billboards;
+        window._billboards = billboards;
+        console.log(`[load] ${billboards.length} annotations from "${file.name}"`);
+
+        const apply = () => {
+          window._spawnOverlay(billboards).revealAll();
+          btnSave.style.display = '';
+        };
+
+        // If overlay function and scene are both ready, apply immediately.
+        // Otherwise poll until they are.
+        if (window._spawnOverlay && window._splat?.isReady()) {
+          apply();
+        } else {
+          const wait = setInterval(() => {
+            if (window._spawnOverlay && window._splat?.isReady()) {
+              clearInterval(wait);
+              apply();
+            }
+          }, 200);
+        }
+      } catch (err) {
+        console.error('[load] Failed:', err);
+        alert('Could not load annotations:\n' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  });
+})();
+
+// ─── Camera controls: walk mode ───────────────────────────────────────────
+(function initCameraControls() {
+
+  const add3   = (a,b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+  const sub3   = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+  const scale3 = (v,s) => [v[0]*s, v[1]*s, v[2]*s];
+  function norm3(v) { const L=Math.hypot(v[0],v[1],v[2]); return L<1e-12?[0,0,1]:[v[0]/L,v[1]/L,v[2]/L]; }
+
+  function cameraAxes(yaw, pitch) {
+    const cy=Math.cos(yaw), sy=Math.sin(yaw), cp=Math.cos(pitch), sp=Math.sin(pitch);
+    return {
+      right: [cy,    0,  -sy],
+      down:  [sp*sy, cp,  sp*cy],
+      fwd:   [sy*cp, -sp, cy*cp],
+    };
+  }
+
+  function makeVM(right, down, fwd, pos) {
+    const tx = -(pos[0]*right[0]+pos[1]*down[0]+pos[2]*fwd[0]);
+    const ty = -(pos[0]*right[1]+pos[1]*down[1]+pos[2]*fwd[1]);
+    const tz = -(pos[0]*right[2]+pos[1]*down[2]+pos[2]*fwd[2]);
+    return [right[0],right[1],right[2],0, down[0],down[1],down[2],0,
+            fwd[0],  fwd[1],  fwd[2],  0, tx,ty,tz, 1];
+  }
+
+  function extractFromVM(V) {
+    const L  = Math.hypot(V[8],V[9],V[10]);
+    const pitch = Math.asin(-V[9]/L);
+    const yaw   = Math.atan2(V[8]/L, V[10]/L);
+    const inv   = window._splat.utils.invert4(V);
+    return { yaw, pitch, pos: [inv[12], inv[13], inv[14]] };
+  }
+
+  const PITCH_MAX = Math.PI * 0.44;
+  let yaw = 0, pitch = 0, pos = [0,0,-5], walkY = 0;
+  const keys = new Set();
+  let drag = null;
+
+  function apply() {
+    if (!window._splat?.setViewMatrix) return;
+    const {right,down,fwd} = cameraAxes(yaw, pitch);
+    window._splat.setViewMatrix(makeVM(right, down, fwd, pos));
+  }
+
+  function updateHint() {
+    const el = document.getElementById('hint');
+    if (el) el.innerHTML =
+      'Drag: look &nbsp;|&nbsp; W/A/S/D: walk &nbsp;|&nbsp; E/Q: up/down &nbsp;|&nbsp; Scroll: forward &nbsp;|&nbsp; Shift: fast' +
+      '<br><strong style="color:#0af">Navigate then click "AI Vision analysis"</strong>';
+  }
+
+  // ── Mouse drag: look ──────────────────────────────────────────────────────
+  window.addEventListener('mousedown', e => {
+    if (e.target.closest('#toolbar,.ann-label')) return;
+    drag = { x:e.clientX, y:e.clientY };
+    e.preventDefault();
+  }, { capture:true });
+
+  window.addEventListener('mousemove', e => {
+    if (!drag) return;
+    yaw  += (e.clientX - drag.x) * 0.004;
+    pitch = Math.max(-PITCH_MAX, Math.min(PITCH_MAX, pitch - (e.clientY - drag.y) * 0.004));
+    drag.x = e.clientX; drag.y = e.clientY;
+    apply();
+  }, { capture:true });
+
+  window.addEventListener('mouseup', () => { drag = null; }, { capture:true });
+
+  window.addEventListener('contextmenu', e => {
+    if (!e.target.closest('#toolbar')) e.preventDefault();
+  }, { capture:true });
+
+  // ── Scroll: forward / back ────────────────────────────────────────────────
+  window.addEventListener('wheel', e => {
+    if (e.target.closest('#toolbar')) return;
+    e.preventDefault();
+    const d = Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY), 80) * 0.006;
+    const {fwd} = cameraAxes(yaw, pitch);
+    pos = add3(pos, scale3(norm3([fwd[0],0,fwd[2]]), -d * 2));
+    pos[1] = walkY;
+    apply();
+  }, { capture:true, passive:false });
+
+  // ── Keyboard: WASD always captured regardless of focus ───────────────────
+  const MOVE_CODES = new Set(['KeyW','KeyS','KeyA','KeyD',
+    'ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight',
+    'KeyE','KeyQ']);
+
+  window.addEventListener('keydown', e => {
+    if (MOVE_CODES.has(e.code)) { keys.add(e.code); return; }
+    const tag = document.activeElement?.tagName;
+    if (tag && tag !== 'BODY' && tag !== 'CANVAS') return;
+    keys.add(e.code);
+  });
+  window.addEventListener('keyup',  e => keys.delete(e.code));
+  window.addEventListener('blur',   () => keys.clear());
+
+  // ── Per-frame walk movement ───────────────────────────────────────────────
+  let lastT = performance.now();
+  function navFrame(now) {
+    const dt = Math.min((now - lastT) / 1000, 0.05);
+    lastT = now;
+    if (keys.size > 0) {
+      const fast  = keys.has('ShiftLeft') || keys.has('ShiftRight');
+      const speed = fast ? 5 : 2;
+      const {right, fwd} = cameraAxes(yaw, pitch);
+      const hFwd = norm3([fwd[0], 0, fwd[2]]);
+      let moved = false;
+      if (keys.has('KeyW') || keys.has('ArrowUp'))    { pos = add3(pos, scale3(hFwd,  speed*dt)); moved=true; }
+      if (keys.has('KeyS') || keys.has('ArrowDown'))  { pos = add3(pos, scale3(hFwd, -speed*dt)); moved=true; }
+      if (keys.has('KeyA') || keys.has('ArrowLeft'))  { pos = sub3(pos, scale3(right, speed*dt)); moved=true; }
+      if (keys.has('KeyD') || keys.has('ArrowRight')) { pos = add3(pos, scale3(right, speed*dt)); moved=true; }
+      if (keys.has('KeyE')) { walkY -= speed*dt; moved=true; }
+      if (keys.has('KeyQ')) { walkY += speed*dt; moved=true; }
+      pos[1] = walkY;
+      if (moved) apply();
+    }
+    requestAnimationFrame(navFrame);
+  }
+
+  // ── Wait for scene, then take control ─────────────────────────────────────
+  const waitCtrl = setInterval(() => {
+    if (!window._splat?.isReady()) return;
+    clearInterval(waitCtrl);
+    const init = extractFromVM(window._splat.getViewMatrix());
+    yaw = init.yaw; pitch = init.pitch; pos = [...init.pos]; walkY = pos[1];
+    window._splat.controlsEnabled = false;
+    updateHint();
+    apply();
+    requestAnimationFrame(navFrame);
+    console.log('[camera] walk mode active');
+  }, 150);
+
+})();
+</script>
+</body>
+</html>

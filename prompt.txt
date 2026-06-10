@@ -1,0 +1,19 @@
+Build a semantic annotation tool for 3D Gaussian Splat scenes using gsplat.js and Claude vision API. Work step by step, one stage at a time, confirming with me before moving to the next.
+Setup
+Create a project folder with an index.html and a .env file. Read ANTHROPIC_API_KEY from .env via a simple Node.js proxy server (server.js) that forwards requests to the Anthropic API to avoid exposing the key in the browser. Run with node server.js.
+Stage 1 -- gsplat.js Viewer
+Load a local exp_jaffa.ply file using gsplat.js (https://github.com/antimatter15/splat). Display it in a full-screen canvas with free camera navigation (orbit, pan, zoom). Confirm the scene renders before proceeding.
+Stage 2 -- Screenshot Sampler
+Add a "Scan" button. When clicked, automatically rotate the camera through 8 preset viewpoints (evenly spaced azimuth, fixed elevation). At each position capture the canvas as a base64 JPEG using canvas.toDataURL(). Store all 8 screenshots in memory. Log each to the console. Do not call any API yet -- show me the screenshots in a 2D preview strip below the viewer so I can verify quality.
+Stage 3 -- Claude Vision Annotations
+For each screenshot, POST to the local Node.js proxy which forwards to Anthropic API (claude-sonnet-4-20250514). Use this system prompt: "You are an architectural and archaeological analyst specializing in late Ottoman and ancient Mediterranean sites. Identify every distinct architectural or archaeological element visible. Return only a JSON array, no other text. Each item: label (short), description (one domain-specific sentence), bbox ([x1,y1,x2,y2] as 0-1 fractions of image dimensions), confidence (0-1)." Parse the response and overlay bounding boxes and labels on each screenshot in the preview strip so I can verify quality before proceeding.
+Stage 4 -- 3D Projection and Persistent Layer
+For each annotation, use the camera position and view matrix at the time of that screenshot to ray-cast the bounding box center into world space. Cluster detections across all 8 views using DBSCAN (epsilon = 0.5 scene units) to merge duplicate labels of the same object seen from multiple angles. Save results as annotations.json with: label, description, world position (x,y,z), confidence, source view count. Render annotations as floating billboard labels in the 3D scene, visible from all angles.
+General requirements:
+
+Vanilla JS + HTML + Node.js, no bundler/build step
+.ply file served locally alongside index.html
+API key never exposed to the browser
+Modular stages, each testable independently
+Console logging throughout
+Ask before assuming file paths or .ply internal structure
