@@ -46,6 +46,30 @@
     font-size: 11px; color: #555; letter-spacing: 1px;
   }
 
+  /* Splash / PLY picker */
+  #splash {
+    position: fixed; inset: 0; z-index: 200;
+    background: #111; display: flex; align-items: center; justify-content: center;
+  }
+  #splash-card {
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    padding: 44px 56px; background: #181818; border: 1px solid #2a2a2a; border-radius: 10px;
+  }
+  #splash-title { font-size: 20px; font-weight: bold; color: #fff; letter-spacing: 1px; }
+  #splash-sub   { font-size: 11px; color: #555; margin-bottom: 4px; }
+  #splash-pick {
+    cursor: pointer; padding: 10px 30px;
+    background: #0af; color: #000; border: none; border-radius: 4px;
+    font-size: 13px; font-family: monospace; font-weight: bold;
+  }
+  #splash-pick:hover { background: #2cf; }
+  #splash-demo {
+    background: none; border: 1px solid #333; color: #666;
+    padding: 6px 18px; border-radius: 4px; font-size: 11px;
+    font-family: monospace; cursor: pointer;
+  }
+  #splash-demo:hover { border-color: #666; color: #aaa; }
+
   /* Error message */
   #message {
     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -190,6 +214,19 @@
 </div>
 <div id="message"></div>
 
+<!-- Splash / PLY picker -->
+<div id="splash">
+  <div id="splash-card">
+    <div id="splash-title">3D Splat Viewer</div>
+    <div id="splash-sub">Open a Gaussian Splat scene to begin</div>
+    <label id="splash-pick">
+      <input id="splash-file" type="file" accept=".ply,.splat" style="display:none">
+      Open PLY / splat file
+    </label>
+    <button id="splash-demo">Use demo scene (exp_jaffa.ply)</button>
+  </div>
+</div>
+
 <!-- Toolbar -->
 <div id="toolbar">
   <button id="btn-annotate" title="Capture current view and annotate with Claude Vision">AI Vision analysis</button>
@@ -207,12 +244,35 @@
   <strong style="color:#0af">Navigate to a position then click "AI Vision analysis"</strong>
 </div>
 
-<script src="splat-main.js"></script>
 <script>
-// Set loader model name from URL param (same logic as splat-main.js)
+// ── Splash / PLY picker ──────────────────────────────────────────────────────
 (function() {
-  const url = new URLSearchParams(location.search).get('url') || '/exp_jaffa.ply';
-  document.getElementById('loader-name').textContent = url.split('/').pop();
+  const splash    = document.getElementById('splash');
+  const fileInput = document.getElementById('splash-file');
+  const demoBtn   = document.getElementById('splash-demo');
+
+  function launch(plyUrl, name) {
+    window._plyObjectUrl = plyUrl;
+    document.getElementById('loader-name').textContent = name;
+    splash.style.display = 'none';
+    const s = document.createElement('script');
+    s.src = 'splat-main.js';
+    document.body.appendChild(s);
+  }
+
+  // Skip splash if ?url= param already present
+  const paramUrl = new URLSearchParams(location.search).get('url');
+  if (paramUrl) { launch(paramUrl, paramUrl.split('/').pop()); return; }
+
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    launch(URL.createObjectURL(file), file.name);
+  });
+
+  demoBtn.addEventListener('click', () => {
+    launch('/exp_jaffa.ply', 'exp_jaffa.ply');
+  });
 })();
 
 // ─── Simulated loader (0 → 100 % over 20 s, then hide when scene ready) ──

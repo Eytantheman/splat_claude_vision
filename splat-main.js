@@ -743,7 +743,7 @@ async function main() {
         viewMatrix = JSON.parse(decodeURIComponent(location.hash.slice(1)));
         carousel = false;
     } catch (err) {}
-    const plyUrl = params.get("url") || "/exp_jaffa.ply";
+    const plyUrl = window._plyObjectUrl || params.get("url") || "/exp_jaffa.ply";
     console.log("Loading PLY from:", plyUrl);
     const req = await fetch(plyUrl);
     console.log(req);
