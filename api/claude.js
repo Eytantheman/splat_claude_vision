@@ -7,7 +7,11 @@ module.exports = async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).end('Method not allowed');
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set in environment' });
+    if (!apiKey) return res.status(500).json({
+        error: 'ANTHROPIC_API_KEY not set in environment',
+        envKeys: Object.keys(process.env).filter(k => k.startsWith('ANTHROPIC') || k.startsWith('API')),
+        nodeEnv: process.env.NODE_ENV,
+    });
 
     try {
         const upstream = await fetch('https://api.anthropic.com/v1/messages', {
