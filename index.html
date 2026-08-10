@@ -127,6 +127,15 @@
   #ann-layer {
     position: fixed; inset: 0; pointer-events: none; z-index: 15; overflow: hidden;
   }
+  #ann-boxes {
+    position: fixed; inset: 0; pointer-events: none; z-index: 14; overflow: hidden;
+  }
+  .ann-box {
+    fill: none; stroke-width: 1px; vector-effect: non-scaling-stroke;
+    transition: opacity 0.25s;
+  }
+  .ann-box.hidden  { opacity: 0; }
+  .ann-box.pending { opacity: 0 !important; }
   .ann-label {
     position: absolute;
     transform: translate(-50%, -50%);
@@ -223,7 +232,7 @@
       <input id="splash-file" type="file" accept=".ply,.splat" style="display:none">
       Open PLY / splat file
     </label>
-    <button id="splash-demo">Use demo scene (exp_jaffa.ply)</button>
+    <button id="splash-demo">Use demo scene (point_cloud_1.ply)</button>
   </div>
 </div>
 
@@ -271,7 +280,7 @@
   });
 
   demoBtn.addEventListener('click', () => {
-    launch('/exp_jaffa.ply', 'exp_jaffa.ply');
+    launch('/example-scene.ply', 'point_cloud_1.ply');
   });
 })();
 
@@ -321,20 +330,76 @@
 
 const COLORS = ['#f55','#5af','#5f5','#ff5','#f5f','#5ff','#fa5','#a5f','#f5a','#af5'];
 
+// ─── Save frame: 'C' captures the current view straight to house-elements/input ────
+(function initFrameSaver() {
+  const hintEl = document.getElementById('hint');
+  let saving = false;
+
+  function resizeCanvas(src, maxPx = 1600) {
+    const scale = Math.min(1, maxPx / Math.max(src.width, src.height));
+    if (scale >= 1) return src;
+    const tmp = document.createElement('canvas');
+    tmp.width  = Math.round(src.width  * scale);
+    tmp.height = Math.round(src.height * scale);
+    tmp.getContext('2d').drawImage(src, 0, 0, tmp.width, tmp.height);
+    return tmp;
+  }
+
+  function flashHint(msg, color) {
+    if (!hintEl) return;
+    const prev = hintEl.innerHTML;
+    hintEl.innerHTML = `<strong style="color:${color}">${msg}</strong>`;
+    setTimeout(() => { hintEl.innerHTML = prev; }, 1400);
+  }
+
+  async function saveFrame() {
+    if (saving || !window._splat?.isReady()) return;
+    saving = true;
+    try {
+      // getCanvas() is the raw WebGL canvas only -- no HUD/toolbar overlay gets baked in,
+      // same as the AI Vision capture path.
+      const dataUrl = resizeCanvas(window._splat.getCanvas()).toDataURL('image/jpeg', 0.92);
+      const resp = await fetch('/api/save-frame', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: dataUrl }),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+      const { filename } = await resp.json();
+      console.log(`[capture] saved ${filename}`);
+      flashHint(`Saved ${filename}`, '#0af');
+    } catch (err) {
+      console.error('[capture]', err);
+      flashHint('Save failed: ' + err.message, '#f55');
+    } finally {
+      saving = false;
+    }
+  }
+
+  window.addEventListener('keydown', e => {
+    if (e.code !== 'KeyC' || e.repeat) return;
+    const tag = document.activeElement?.tagName;
+    if (tag && tag !== 'BODY' && tag !== 'CANVAS') return; // don't fire while typing elsewhere
+    saveFrame();
+  });
+})();
+
 // ─── Annotate current view ─────────────────────────────────────────────────
 (function initAnnotator() {
   const SYSTEM_PROMPT =
-    'You are an expert architectural and archaeological analyst specializing in late Ottoman, Crusader, ' +
-    'and ancient Mediterranean sites. Examine the scene carefully and identify every distinct ' +
-    'architectural or archaeological element visible. ' +
-    'Return ONLY a valid JSON array with no other text, markdown, or explanation. ' +
+    'Identify the objects in this frame. How many objects are there, and what are they? ' +
+    'Return ONLY a valid JSON array with no other text, markdown, or explanation — ' +
+    'the number of elements in the array is the object count. ' +
     'Each element must have exactly these fields:\n' +
-    '  label: a concise noun phrase naming the element (e.g. "pointed arch doorway", "rusticated ashlar masonry");\n' +
-    '  description: three sentences — (1) identify the element and its visible characteristics, ' +
-    '(2) describe its construction material, technique, or style with specific architectural terminology, ' +
-    '(3) explain its historical or cultural significance within late Ottoman, Crusader, or ancient Mediterranean archaeology;\n' +
-    '  bbox: [x1, y1, x2, y2] as 0–1 fractions of image dimensions, drawn tightly around the element;\n' +
-    '  confidence: 0–1 reflecting how clearly the element is visible and identifiable.';
+    '  label: a concise noun phrase naming the object;\n' +
+    '  description: 2-4 sentences giving a high-resolution account of the object — ' +
+    '(1) its color(s); (2) its material(s) and surface texture; ' +
+    '(3) if it is a group or container, how many individual items it comprises or holds ' +
+    '(e.g. "a set of 6 chairs", "holds roughly 20 ceramic vessels"); ' +
+    '(4) its spatial or functional relation to other visible objects ' +
+    '(e.g. "resting on the wooden table", "mounted above the doorway", "20 vessels arranged inside the cabinet");\n' +
+    '  bbox: [x1, y1, x2, y2] as 0–1 fractions of image dimensions, tightly framing the object ' +
+    'so a 1px outline drawn at these coordinates traces its edges;\n' +
+    '  confidence: 0–1 reflecting how clearly the object is visible and identifiable.';
 
   const MODEL = 'claude-sonnet-4-6';
 
@@ -396,7 +461,8 @@ const COLORS = ['#f55','#5af','#5f5','#ff5','#f5f','#5ff','#fa5','#a5f','#f5a','
         role: 'user',
         content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-          { type: 'text',  text: 'Identify all architectural and archaeological elements visible in this image.' }
+          { type: 'text',  text: 'Identify the objects in this frame. How many are there, what are they, what color and material is each, ' +
+            'and how do they relate to one another (e.g. "20 vessels arranged inside the cabinet")?' }
         ]
       }]
     });
@@ -560,10 +626,10 @@ const COLORS = ['#f55','#5af','#5f5','#ff5','#f5f','#5ff','#fa5','#a5f','#f5a','
       const O = camWorldPos(V);
       for (const ann of view.annotations) {
         const key = ann.label.toLowerCase().trim();
-        if (!groups.has(key)) groups.set(key, { label: ann.label, desc: '', conf: 0, rays: [] });
+        if (!groups.has(key)) groups.set(key, { label: ann.label, desc: '', conf: 0, rays: [], bbox: null, O: null, V: null });
         const g = groups.get(key);
         const c = ann.confidence || 0;
-        if (c > g.conf) { g.conf = c; g.desc = ann.description || ''; }
+        if (c > g.conf) { g.conf = c; g.desc = ann.description || ''; g.bbox = ann.bbox; g.O = O; g.V = V; }
         const cx = (ann.bbox[0] + ann.bbox[2]) * 0.5;
         const cy = (ann.bbox[1] + ann.bbox[3]) * 0.5;
         g.rays.push({ O, D: unprojectDir(cx, cy, V, P) });
@@ -591,7 +657,18 @@ const COLORS = ['#f55','#5af','#5f5','#ff5','#f5f','#5ff','#fa5','#a5f','#f5a','
         const { O, D } = g.rays[0];
         pos = [O[0]+D[0]*FALLBACK_DEPTH, O[1]+D[1]*FALLBACK_DEPTH, O[2]+D[2]*FALLBACK_DEPTH];
       }
-      billboards.push({ label: g.label, desc: g.desc, conf: g.conf, pos });
+
+      // Outline corners: unproject the 4 corners of the highest-confidence bbox at the
+      // same camera distance as the triangulated/fallback center, so the box tracks the
+      // object as a rigid quad when the camera moves (same approximation billboards use).
+      const camDist = Math.hypot(pos[0]-g.O[0], pos[1]-g.O[1], pos[2]-g.O[2]);
+      const [bx1, by1, bx2, by2] = g.bbox;
+      const corners = [[bx1,by1], [bx2,by1], [bx2,by2], [bx1,by2]].map(([cx,cy]) => {
+        const D = unprojectDir(cx, cy, g.V, P);
+        return [g.O[0]+D[0]*camDist, g.O[1]+D[1]*camDist, g.O[2]+D[2]*camDist];
+      });
+
+      billboards.push({ label: g.label, desc: g.desc, conf: g.conf, pos, corners });
     }
 
     billboards.sort((a,b) => b.conf - a.conf);
@@ -607,6 +684,14 @@ const COLORS = ['#f55','#5af','#5f5','#ff5','#f5f','#5ff','#fa5','#a5f','#f5a','
     const layer = document.createElement('div');
     layer.id = 'ann-layer';
     document.body.appendChild(layer);
+
+    // SVG layer for the 1px outline boxes traced around each object
+    const oldBoxes = document.getElementById('ann-boxes');
+    if (oldBoxes) oldBoxes.remove();
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const boxLayer = document.createElementNS(svgNS, 'svg');
+    boxLayer.id = 'ann-boxes';
+    document.body.appendChild(boxLayer);
 
     // Singleton popup — recreate fresh each spawnOverlay call
     let popup = document.getElementById('ann-popup');
@@ -684,13 +769,20 @@ const COLORS = ['#f55','#5af','#5f5','#ff5','#f5f','#5ff','#fa5','#a5f','#f5a','
         openPopup(b, color, chip);
       });
 
-      return { chip, pos: b.pos };
+      const poly = document.createElementNS(svgNS, 'polygon');
+      poly.setAttribute('class', 'ann-box' + (i >= fromIndex ? ' pending' : ''));
+      poly.setAttribute('stroke', color);
+      boxLayer.appendChild(poly);
+
+      return { chip, poly, pos: b.pos, corners: b.corners };
     });
 
     (function frame() {
       const V    = window._splat.getViewMatrix();
       const Proj = window._splat.getProjectionMatrix();
       const W = window.innerWidth, H = window.innerHeight;
+      boxLayer.setAttribute('width', W);
+      boxLayer.setAttribute('height', H);
       for (const it of items) {
         const sc = projectScreen(it.pos, V, Proj);
         if (!sc) {
@@ -700,13 +792,21 @@ const COLORS = ['#f55','#5af','#5f5','#ff5','#f5f','#5ff','#fa5','#a5f','#f5a','
           it.chip.style.top  = (sc.sy * H) + 'px';
           it.chip.classList.remove('hidden');
         }
+
+        const cornerPts = it.corners?.map(c => projectScreen(c, V, Proj));
+        if (cornerPts && cornerPts.every(Boolean)) {
+          it.poly.setAttribute('points', cornerPts.map(p => `${p.sx*W},${p.sy*H}`).join(' '));
+          it.poly.classList.remove('hidden');
+        } else {
+          it.poly.classList.add('hidden');
+        }
       }
       requestAnimationFrame(frame);
     })();
 
     return {
-      revealAt(i)  { if (items[i]) items[i].chip.classList.remove('pending'); },
-      revealAll()  { items.forEach(it => it.chip.classList.remove('pending')); },
+      revealAt(i)  { if (items[i]) { items[i].chip.classList.remove('pending'); items[i].poly.classList.remove('pending'); } },
+      revealAll()  { items.forEach(it => { it.chip.classList.remove('pending'); it.poly.classList.remove('pending'); }); },
     };
   }
 
@@ -733,7 +833,7 @@ const COLORS = ['#f55','#5af','#5f5','#ff5','#f5f','#5ff','#fa5','#a5f','#f5a','
   btnSave.addEventListener('click', () => {
     const bb = window._billboards;
     if (!bb?.length) return;
-    const modelName = (new URLSearchParams(location.search).get('url') || '/exp_jaffa.ply').split('/').pop();
+    const modelName = (new URLSearchParams(location.search).get('url') || '/example-scene.ply').split('/').pop();
     const payload = {
       version: 1,
       model:   modelName,
@@ -847,7 +947,7 @@ const COLORS = ['#f55','#5af','#5f5','#ff5','#f5f','#5ff','#fa5','#a5f','#f5a','
   function updateHint() {
     const el = document.getElementById('hint');
     if (el) el.innerHTML =
-      'Drag: look &nbsp;|&nbsp; W/A/S/D: walk &nbsp;|&nbsp; E/Q: up/down &nbsp;|&nbsp; Scroll: forward &nbsp;|&nbsp; Shift: fast' +
+      'Drag: look &nbsp;|&nbsp; W/A/S/D: walk &nbsp;|&nbsp; E/Q: up/down &nbsp;|&nbsp; Scroll: forward &nbsp;|&nbsp; Shift: fast &nbsp;|&nbsp; C: save frame' +
       '<br><strong style="color:#0af">Navigate then click "AI Vision analysis"</strong>';
   }
 
@@ -924,13 +1024,30 @@ const COLORS = ['#f55','#5af','#5f5','#ff5','#f5f','#5ff','#fa5','#a5f','#f5a','
   const waitCtrl = setInterval(() => {
     if (!window._splat?.isReady()) return;
     clearInterval(waitCtrl);
-    const init = extractFromVM(window._splat.getViewMatrix());
-    yaw = init.yaw; pitch = init.pitch; pos = [...init.pos]; walkY = pos[1];
+
+    // Start centered in whatever scene actually loaded, level and with no roll. The engine's
+    // own getViewMatrix() at this point is still `defaultViewMatrix` -- a hardcoded camera pose
+    // left over from a different demo scene entirely, unrelated to the loaded PLY's geometry or
+    // orientation. Using it (via extractFromVM) is why the camera used to start outside the
+    // scan and visibly tilted. window._splat.getCentroid() is the mean vertex position computed
+    // while parsing this specific PLY, so it's always inside the actual scene.
+    const centroid = window._splat.getCentroid?.();
+    if (centroid) {
+      pos = [...centroid];
+      yaw = 0; pitch = 0;
+    } else {
+      // Raw .splat uploads skip PLY parsing and have no centroid -- fall back to the old
+      // (imperfect, but better than nothing) extraction from the engine's current view matrix.
+      const init = extractFromVM(window._splat.getViewMatrix());
+      yaw = init.yaw; pitch = init.pitch; pos = [...init.pos];
+    }
+    walkY = pos[1];
+
     window._splat.controlsEnabled = false;
     updateHint();
     apply();
     requestAnimationFrame(navFrame);
-    console.log('[camera] walk mode active');
+    console.log('[camera] walk mode active, start pos', pos);
   }, 150);
 
 })();

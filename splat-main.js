@@ -550,6 +550,11 @@ function createWorker(self) {
         const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
         const buffer = new ArrayBuffer(rowLength * vertexCount);
 
+        // Track the point cloud's centroid (mean position) while we're already looping over
+        // every vertex, so the camera can start centered in whatever scene actually loaded
+        // instead of a hardcoded pose left over from a different demo scene.
+        let sumX = 0, sumY = 0, sumZ = 0;
+
         console.time("build buffer");
         for (let j = 0; j < vertexCount; j++) {
             row = sizeIndex[j];
@@ -597,6 +602,9 @@ function createWorker(self) {
             position[0] = attrs.x;
             position[1] = attrs.y;
             position[2] = attrs.z;
+            sumX += attrs.x;
+            sumY += attrs.y;
+            sumZ += attrs.z;
 
             if (types["f_dc_0"]) {
                 const SH_C0 = 0.28209479177387814;
@@ -615,7 +623,10 @@ function createWorker(self) {
             }
         }
         console.timeEnd("build buffer");
-        return buffer;
+        const centroid = vertexCount > 0
+            ? [sumX / vertexCount, sumY / vertexCount, sumZ / vertexCount]
+            : null;
+        return { buffer, centroid };
     }
 
     const throttledSort = () => {
@@ -637,9 +648,10 @@ function createWorker(self) {
         if (e.data.ply) {
             vertexCount = 0;
             runSort(viewProj);
-            buffer = processPlyBuffer(e.data.ply);
+            const parsed = processPlyBuffer(e.data.ply);
+            buffer = parsed.buffer;
             vertexCount = Math.floor(buffer.byteLength / rowLength);
-            postMessage({ buffer: buffer, save: !!e.data.save });
+            postMessage({ buffer: buffer, save: !!e.data.save, centroid: parsed.centroid });
         } else if (e.data.buffer) {
             buffer = e.data.buffer;
             vertexCount = e.data.vertexCount;
@@ -743,7 +755,7 @@ async function main() {
         viewMatrix = JSON.parse(decodeURIComponent(location.hash.slice(1)));
         carousel = false;
     } catch (err) {}
-    const plyUrl = window._plyObjectUrl || params.get("url") || "/exp_jaffa.ply";
+    const plyUrl = window._plyObjectUrl || params.get("url") || "/example-scene.ply";
     console.log("Loading PLY from:", plyUrl);
     const req = await fetch(plyUrl);
     console.log(req);
@@ -765,6 +777,7 @@ async function main() {
             }),
         ),
     );
+    let plyCentroid = null;
 
     const canvas = document.getElementById("canvas");
     const fps = document.getElementById("fps");
@@ -863,6 +876,7 @@ async function main() {
     worker.onmessage = (e) => {
         if (e.data.buffer) {
             splatData = new Uint8Array(e.data.buffer);
+            if (e.data.centroid) plyCentroid = e.data.centroid;
             if (e.data.save) {
                 const blob = new Blob([splatData.buffer], {
                     type: "application/octet-stream",
@@ -1391,6 +1405,7 @@ async function main() {
         setCarousel: (v) => { carousel = v; },
         getCanvas: () => canvas,
         isReady: () => vertexCount > 0,
+        getCentroid: () => (plyCentroid ? [...plyCentroid] : null),
         onDepthUpdate: null,
         defaultViewMatrix: [...defaultViewMatrix],
         getProjectionMatrix: () => [...projectionMatrix],

@@ -16,6 +16,10 @@ const ANTHROPIC_API_KEY = readApiKey();
 const PORT = 3001;
 const STATIC_DIR = __dirname;
 
+// Example scene lives outside the project directory, so it's served from an
+// explicit path rather than STATIC_DIR.
+const EXAMPLE_SCENE_PATH = 'C:\\Users\\emannkanowitz\\Downloads\\Musuem-20260610T072808Z-3-001\\Musuem\\point_cloud_1.ply';
+
 const MIME = {
     '.html': 'text/html',
     '.js':   'application/javascript',
@@ -25,21 +29,11 @@ const MIME = {
     '.env':  'text/plain',
 };
 
-function serveStatic(req, res) {
-    const urlPath = decodeURIComponent(req.url.split('?')[0]);
-    const filePath = path.join(STATIC_DIR, urlPath === '/' ? 'index.html' : urlPath);
-
-    // Block access to the env/key file from the browser
-    if (filePath.endsWith('.env')) {
-        res.writeHead(403);
-        res.end('Forbidden');
-        return;
-    }
-
+function streamFile(filePath, res) {
     fs.stat(filePath, (err, stat) => {
         if (err || !stat.isFile()) {
             res.writeHead(404, { 'Content-Type': 'text/plain' });
-            res.end('Not found: ' + urlPath);
+            res.end('Not found: ' + filePath);
             return;
         }
         const ext = path.extname(filePath).toLowerCase();
@@ -49,6 +43,26 @@ function serveStatic(req, res) {
         });
         fs.createReadStream(filePath).pipe(res);
     });
+}
+
+function serveStatic(req, res) {
+    const urlPath = decodeURIComponent(req.url.split('?')[0]);
+
+    if (urlPath === '/example-scene.ply') {
+        streamFile(EXAMPLE_SCENE_PATH, res);
+        return;
+    }
+
+    const filePath = path.join(STATIC_DIR, urlPath === '/' ? 'index.html' : urlPath);
+
+    // Block access to the env/key file from the browser
+    if (filePath.endsWith('.env')) {
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+    }
+
+    streamFile(filePath, res);
 }
 
 function handleClaudeProxy(req, res) {
@@ -87,6 +101,37 @@ function handleClaudeProxy(req, res) {
     });
 }
 
+const FRAME_INPUT_DIR = path.join(__dirname, 'house-elements', 'input');
+
+function handleSaveFrame(req, res) {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+        try {
+            const { image } = JSON.parse(body);
+            const match = /^data:image\/(jpeg|png);base64,(.+)$/.exec(image || '');
+            if (!match) throw new Error('expected a base64 data URL in "image"');
+            const [, ext, b64] = match;
+            const fileExt = ext === 'png' ? 'png' : 'jpg';
+
+            fs.mkdirSync(FRAME_INPUT_DIR, { recursive: true });
+            const existing = fs.readdirSync(FRAME_INPUT_DIR)
+                .map(f => /^view_(\d+)\.(jpe?g|png)$/i.exec(f))
+                .filter(Boolean)
+                .map(m => parseInt(m[1], 10));
+            const next = (existing.length ? Math.max(...existing) : 0) + 1;
+            const filename = `view_${String(next).padStart(2, '0')}.${fileExt}`;
+
+            fs.writeFileSync(path.join(FRAME_INPUT_DIR, filename), Buffer.from(b64, 'base64'));
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ filename }));
+        } catch (err) {
+            res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ error: err.message }));
+        }
+    });
+}
+
 const server = http.createServer((req, res) => {
     console.log(req.method, req.url);
 
@@ -102,6 +147,8 @@ const server = http.createServer((req, res) => {
 
     if (req.method === 'POST' && req.url === '/api/claude') {
         handleClaudeProxy(req, res);
+    } else if (req.method === 'POST' && req.url === '/api/save-frame') {
+        handleSaveFrame(req, res);
     } else if (req.method === 'GET') {
         serveStatic(req, res);
     } else {
